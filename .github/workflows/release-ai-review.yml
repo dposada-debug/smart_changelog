@@ -2,62 +2,84 @@ name: Release AI Review
 
 on:
   release:
-    types: [created, edited]
+    types: [published, edited]
 
 jobs:
   ai-review:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Extract release body
-        id: release
-        run: |
-          echo "BODY<<EOF" >> $GITHUB_OUTPUT
-          echo "${{ github.event.release.body }}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: AI consistency and clarity review
+      - name: Validate release with AI
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          RELEASE_BODY: ${{ steps.release.outputs.BODY }}
+          RELEASE_BODY: ${{ github.event.release.body }}
         run: |
-          set -e
+          set -euo pipefail
 
           echo "🤖 Running AI consistency review..."
 
-          RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+          if [ -z "$RELEASE_BODY" ]; then
+            echo "❌ Release body is empty"
+            exit 1
+          fi
+
+          RESPONSE=$(curl -sS https://api.openai.com/v1/chat/completions \
             -H "Authorization: Bearer $OPENAI_API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{
-              "model": "gpt-4.1-mini",
-              "temperature": 0.2,
-              "messages": [
-                {
-                  "role": "system",
-                  "content": "You are an AI reviewer evaluating software release explanations for customer clarity, consistency, and usefulness."
-                },
-                {
-                  "role": "user",
-                  "content": "Review the release explanation below using these rules:\n\n1. The explanation must be understandable by a non-technical customer.\n2. \"What was deployed\" and \"Customer impact\" must describe the same change.\n3. \"How would you explain this to a customer\" must be usable by Support.\n4. Flag major inconsistencies, contradictions, or meaningless text.\n\nReturn ONLY valid JSON with:\n- score: number from 0 to 100\n- verdict: PASS or FAIL\n- major_issues: array of strings\n- suggestions: array of strings\n\nRelease:\n\n'"$RELEASE_BODY"'"
-                }
-              ]
-            }')
+            -d "$(jq -n \
+              --arg content "$RELEASE_BODY" \
+              '{
+                model: "gpt-4o-mini",
+                temperature: 0,
+                messages: [
+                  {
+                    "role": "system",
+                    "content": "You are a strict release reviewer. Score clarity, customer impact, justification, and cross-team impact."
+                  },
+                  {
+                    "role": "user",
+                    "content": "Review the following release notes. Respond ONLY with valid JSON in this format:\n{\n  \"score\": number (0-100),\n  \"verdict\": \"PASS\" or \"FAIL\",\n  \"issues\": [string]\n}\n\nRelease notes:\n\n\($content)"
+                  }
+                ]
+              }')"
+          )
 
           echo "AI raw response:"
           echo "$RESPONSE"
 
-          CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+          # 1️⃣ Fail if OpenAI returns an error
+          ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty')
+          if [ -n "$ERROR" ]; then
+            echo "❌ OpenAI API error:"
+            echo "$ERROR"
+            exit 1
+          fi
 
-          SCORE=$(echo "$CONTENT" | jq '.score')
-          VERDICT=$(echo "$CONTENT" | jq -r '.verdict')
+          # 2️⃣ Extract AI message content
+          AI_CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+          if [ -z "$AI_CONTENT" ]; then
+            echo "❌ AI response missing content"
+            exit 1
+          fi
+
+          echo "Parsed AI content:"
+          echo "$AI_CONTENT"
+
+          # 3️⃣ Parse score safely
+          SCORE=$(echo "$AI_CONTENT" | jq -r '.score // empty')
+          VERDICT=$(echo "$AI_CONTENT" | jq -r '.verdict // empty')
+
+          if ! [[ "$SCORE" =~ ^[0-9]+$ ]]; then
+            echo "❌ Invalid or missing AI score: '$SCORE'"
+            exit 1
+          fi
 
           echo "AI score: $SCORE"
           echo "AI verdict: $VERDICT"
 
-          if [ "$SCORE" -lt 40 ] || [ "$VERDICT" = "FAIL" ]; then
-            echo "❌ AI review failed (minimum score is 40)"
-            echo "Issues:"
-            echo "$CONTENT" | jq -r '.major_issues[]?'
+          # 4️⃣ Enforce 40% minimum score
+          if [ "$SCORE" -lt 40 ]; then
+            echo "❌ AI score too low ($SCORE < 40)"
             exit 1
           fi
 
