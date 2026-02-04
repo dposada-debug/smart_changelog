@@ -7,6 +7,10 @@ on:
 jobs:
   ai-review:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      improved_body_b64: ${{ steps.set-improved-output.outputs.improved_body_b64 }}
 
     steps:
       - name: Validate release with AI
@@ -85,6 +89,71 @@ jobs:
 
           echo "✅ AI review passed"
 
+      - name: Improve release notes with AI
+        id: improve
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          set -euo pipefail
+          echo "🤖 Asking AI to correct and improve release notes..."
+          RESPONSE=$(curl -sS https://api.openai.com/v1/chat/completions \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg content "$RELEASE_BODY" \
+              '{
+                model: "gpt-4o-mini",
+                temperature: 0.3,
+                response_format: { type: "json_object" },
+                messages: [
+                  {
+                    "role": "system",
+                    "content": "You improve and correct release notes / changelogs. Preserve the author'\''s intent and structure (sections like What was deployed, Customer impact, etc.) but fix grammar, clarity, and tone. Make it more professional and customer-ready. Return ONLY a JSON object with a single key \"improved_body\" whose value is the full improved markdown string. No other keys. Escape newlines and quotes in the string as required for JSON."
+                  },
+                  {
+                    "role": "user",
+                    "content": "Improve these release notes:\n\n\($content)"
+                  }
+                ]
+              }')"
+          )
+          ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty')
+          if [ -n "$ERROR" ]; then
+            echo "❌ OpenAI API error: $ERROR"
+            exit 1
+          fi
+          IMPROVED_RAW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+          if [ -z "$IMPROVED_RAW" ]; then
+            echo "❌ AI returned no content"
+            exit 1
+          fi
+          echo "$IMPROVED_RAW" | jq -r '.improved_body' > improved_body.md
+          echo "✅ Improved release notes generated"
+
+      - name: Update GitHub release with improved body
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ github.event.release.id }}
+        run: |
+          set -euo pipefail
+          BODY_JSON=$(jq -Rs . improved_body.md)
+          curl -sSf -X PATCH \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}" \
+            -d "{\"body\": $BODY_JSON}"
+          echo "✅ Release body updated with AI-improved notes"
+
+      - name: Set improved body output for next job
+        id: set-improved-output
+        run: |
+          base64 -w0 improved_body.md >> improved_b64.txt
+          echo "improved_body_b64<<EOF" >> $GITHUB_OUTPUT
+          cat improved_b64.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
   push-to-external-repo:
     needs: ai-review
     runs-on: ubuntu-latest
@@ -101,12 +170,13 @@ jobs:
 
       - name: Create release notes file
         env:
-          RELEASE_BODY: ${{ github.event.release.body }}
+          IMPROVED_BODY_B64: ${{ needs.ai-review.outputs.improved_body_b64 }}
         run: |
           RELEASE_TAG="${{ github.event.release.tag_name }}"
           NOTES_DIR="releases"
           mkdir -p "$NOTES_DIR"
           FILE_PATH="${NOTES_DIR}/${RELEASE_TAG}.md"
+          echo "$IMPROVED_BODY_B64" | base64 -d > improved_body.md
           {
             echo "# Release ${RELEASE_TAG}"
             echo ""
@@ -114,7 +184,7 @@ jobs:
             echo ""
             echo "---"
             echo ""
-            printf '%s\n' "$RELEASE_BODY"
+            cat improved_body.md
           } > "$FILE_PATH"
           echo "Created $FILE_PATH"
 
