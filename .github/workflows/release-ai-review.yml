@@ -78,8 +78,8 @@ jobs:
           echo "AI verdict: $VERDICT"
 
           # 4️⃣ Enforce 40% minimum score
-          if [ "$SCORE" -lt 40 ]; then
-            echo "❌ AI score too low ($SCORE < 40)"
+          if [ "$SCORE" -lt 60 ]; then
+            echo "❌ AI score too low ($SCORE < 60)"
             exit 1
           fi
 
