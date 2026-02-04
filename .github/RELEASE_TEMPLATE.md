@@ -1,9 +1,11 @@
 ## 🧩 What was deployed?
+
 <!-- REQUIRED -->
 <!-- Describe exactly what changed. Use concrete terms (feature, fix, change in behavior). -->
 <!-- Avoid internal jargon unless necessary. -->
 
 ## 🎯 Customer impact
+
 <!-- REQUIRED -->
 <!-- What problem does this solve for clients? What improvement will they notice? -->
 <!-- If this is internal only, say explicitly: "No direct customer impact" and explain why. -->
