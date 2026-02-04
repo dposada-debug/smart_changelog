@@ -53,13 +53,6 @@ How do we confirm this is working?
 - Expected result: <what “good” looks like>
 - Metrics / dashboards (if any): <links or names>
 
----
-
-## 🧯 Rollback / Mitigation (Required)
-If something goes wrong:
-- Rollback method: <revert / toggle flag / redeploy previous version>
-- Owner: <team/person>
-- Customer messaging (if needed): <1–2 sentences>
 
 ---
 
