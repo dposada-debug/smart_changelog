@@ -1,50 +1,65 @@
-name: Release template structure check
+name: Release Structure Check
 
 on:
-  push:
-    paths:
-      - '.github/release_template.md'
-  pull_request:
-    paths:
-      - '.github/release_template.md'
-  workflow_dispatch:
+  release:
+    types: [created, edited]
 
 jobs:
-  validate-template:
+  validate-release-structure:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Validate release template structure
+      - name: Validate release body structure
+        env:
+          RELEASE_BODY: ${{ github.event.release.body }}
         run: |
-          TEMPLATE='.github/release_template.md'
-          if [ ! -f "$TEMPLATE" ]; then
-            echo "::error file=$TEMPLATE::Release template not found."
-            exit 1
-          fi
+          set -e
 
-          REQUIRED_SECTIONS=(
-            '## 📦 Release Summary'
-            '## 🧩 What was deployed?'
-            '## 🎯 Customer impact'
-            '## 🗣 How would you explain this to a customer?'
-            '## 🏢 Impact on other areas'
-            '## 🔍 Justification'
-            '## 📽 Demo / Evidence'
+          echo "🔍 Validating release structure..."
+
+          required_sections=(
+            "## 🧩 What was deployed?"
+            "## 🎯 Customer impact"
+            "## 🗣 How would you explain this to a customer?"
+            "## 🏢 Impact on other areas"
+            "## 🔍 Justification"
           )
 
-          MISSING=()
-          for section in "${REQUIRED_SECTIONS[@]}"; do
-            if ! grep -qF "$section" "$TEMPLATE"; then
-              MISSING+=("$section")
+          for section in "${required_sections[@]}"; do
+            if ! echo "$RELEASE_BODY" | grep -q "$section"; then
+              echo "❌ Missing required section: $section"
+              exit 1
             fi
           done
 
-          if [ ${#MISSING[@]} -ne 0 ]; then
-            echo "::error::Release template is missing required section(s):"
-            printf '  - %s\n' "${MISSING[@]}"
-            exit 1
+          echo "✅ All required sections are present"
+
+          # Ensure required sections are not empty
+          echo "🔍 Checking that required sections are filled..."
+
+          empty_markers=(
+            "Describe \\*what changed\\*"
+            "Explain \\*why this matters\\*"
+            "Write this as if you were speaking"
+            "Does this affect other teams"
+            "Why was this change necessary"
+          )
+
+          for marker in "${empty_markers[@]}"; do
+            if echo "$RELEASE_BODY" | grep -qi "$marker"; then
+              echo "❌ One or more required sections appear to be unfilled"
+              exit 1
+            fi
+          done
+
+          # Explicit check for Impact on other areas
+          if echo "$RELEASE_BODY" | grep -q "## 🏢 Impact on other areas"; then
+            SECTION_CONTENT=$(echo "$RELEASE_BODY" | awk '/## 🏢 Impact on other areas/{flag=1;next}/## /{flag=0}flag')
+
+            if ! echo "$SECTION_CONTENT" | grep -qi "no cross-team impact"; then
+              echo "❌ 'Impact on other areas' must explicitly state 'No cross-team impact.' if none apply"
+              exit 1
+            fi
           fi
 
-          echo "All required section headers present in release template."
+          echo "✅ Release structure validation passed"
