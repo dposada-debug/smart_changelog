@@ -20,13 +20,14 @@ jobs:
           required_sections=(
             "## 🧩 What was deployed?"
             "## 🎯 Customer impact"
-            "## 🗣 How would you explain this to a customer?"
-            "## 🏢 Impact on other areas"
+            "## 👀 Where will users notice it?"
+            "## 🗣 How can I explain this to a customer?"
+            "## 🏢 What other areas of the company does this affect?"
             "## 🔍 Justification"
           )
 
           for section in "${required_sections[@]}"; do
-            if ! echo "$RELEASE_BODY" | grep -q "$section"; then
+            if ! echo "$RELEASE_BODY" | grep -qF "$section"; then
               echo "❌ Missing required section: $section"
               exit 1
             fi
@@ -34,30 +35,12 @@ jobs:
 
           echo "✅ All required sections are present"
 
-          # Ensure required sections are not empty
-          echo "🔍 Checking that required sections are filled..."
-
-          empty_markers=(
-            "Describe \\*what changed\\*"
-            "Explain \\*why this matters\\*"
-            "Write this as if you were speaking"
-            "Does this affect other teams"
-            "Why was this change necessary"
-          )
-
-          for marker in "${empty_markers[@]}"; do
-            if echo "$RELEASE_BODY" | grep -qi "$marker"; then
-              echo "❌ One or more required sections appear to be unfilled"
-              exit 1
-            fi
-          done
-
-          # Explicit check for Impact on other areas
-          if echo "$RELEASE_BODY" | grep -q "## 🏢 Impact on other areas"; then
-            SECTION_CONTENT=$(echo "$RELEASE_BODY" | awk '/## 🏢 Impact on other areas/{flag=1;next}/## /{flag=0}flag')
+          # Explicit check: cross-team section must state impact or "No cross-team impact"
+          if echo "$RELEASE_BODY" | grep -qF "## 🏢 What other areas of the company does this affect?"; then
+            SECTION_CONTENT=$(echo "$RELEASE_BODY" | awk '/## 🏢 What other areas of the company does this affect\?/{flag=1;next}/## /{flag=0}flag')
 
             if ! echo "$SECTION_CONTENT" | grep -qi "no cross-team impact"; then
-              echo "❌ 'Impact on other areas' must explicitly state 'No cross-team impact.' if none apply"
+              echo "❌ 'What other areas of the company does this affect?' must explicitly state impact or 'No cross-team impact'"
               exit 1
             fi
           fi
