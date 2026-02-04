@@ -29,6 +29,7 @@ jobs:
           for section in "${required_sections[@]}"; do
             if ! echo "$RELEASE_BODY" | grep -qF "$section"; then
               echo "❌ Missing required section: $section"
+              echo "👉 Please copy the template from .github/RELEASE_TEMPLATE.md"
               exit 1
             fi
           done
