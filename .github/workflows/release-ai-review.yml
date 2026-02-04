@@ -84,3 +84,47 @@ jobs:
           fi
 
           echo "✅ AI review passed"
+
+  push-to-external-repo:
+    needs: ai-review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout external repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.EXTERNAL_REPO }}
+          token: ${{ secrets.EXTERNAL_REPO_TOKEN }}
+          fetch-depth: 0
+
+      - name: Create release notes file
+        env:
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          RELEASE_TAG="${{ github.event.release.tag_name }}"
+          NOTES_DIR="releases"
+          mkdir -p "$NOTES_DIR"
+          FILE_PATH="${NOTES_DIR}/${RELEASE_TAG}.md"
+          {
+            echo "# Release ${RELEASE_TAG}"
+            echo ""
+            echo "**Published:** ${{ github.event.release.published_at }}"
+            echo ""
+            echo "---"
+            echo ""
+            printf '%s\n' "$RELEASE_BODY"
+          } > "$FILE_PATH"
+          echo "Created $FILE_PATH"
+
+      - name: Commit and push to external repository
+        run: |
+          RELEASE_TAG="${{ github.event.release.tag_name }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "releases/${RELEASE_TAG}.md"
+          git diff --staged --quiet && echo "No changes to commit" || {
+            git commit -m "chore: add release notes for ${RELEASE_TAG}"
+            git push origin HEAD
+          }
