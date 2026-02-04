@@ -1,0 +1,50 @@
+name: Release template structure check
+
+on:
+  push:
+    paths:
+      - '.github/release_template.md'
+  pull_request:
+    paths:
+      - '.github/release_template.md'
+  workflow_dispatch:
+
+jobs:
+  validate-template:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate release template structure
+        run: |
+          TEMPLATE='.github/release_template.md'
+          if [ ! -f "$TEMPLATE" ]; then
+            echo "::error file=$TEMPLATE::Release template not found."
+            exit 1
+          fi
+
+          REQUIRED_SECTIONS=(
+            '## 📦 Release Summary'
+            '## 🧩 What was deployed?'
+            '## 🎯 Customer impact'
+            '## 🗣 How would you explain this to a customer?'
+            '## 🏢 Impact on other areas'
+            '## 🔍 Justification'
+            '## 📽 Demo / Evidence'
+          )
+
+          MISSING=()
+          for section in "${REQUIRED_SECTIONS[@]}"; do
+            if ! grep -qF "$section" "$TEMPLATE"; then
+              MISSING+=("$section")
+            fi
+          done
+
+          if [ ${#MISSING[@]} -ne 0 ]; then
+            echo "::error::Release template is missing required section(s):"
+            printf '  - %s\n' "${MISSING[@]}"
+            exit 1
+          fi
+
+          echo "All required section headers present in release template."
