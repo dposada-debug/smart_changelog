@@ -1,0 +1,98 @@
+name: Release notes AI consistency review
+
+on:
+  release:
+    types: [created, edited]
+
+env:
+  MIN_PASSING_SCORE: 40
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: AI consistency review of release notes
+        id: review
+        env:
+          RELEASE_BODY: ${{ github.event.release.body }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          MIN_SCORE: ${{ env.MIN_PASSING_SCORE }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -e
+
+          echo "## 🤖 AI consistency review" >> $GITHUB_STEP_SUMMARY
+          echo ""
+
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::OPENAI_API_KEY secret is not set. Add it in repository Settings → Secrets and variables → Actions to enable AI review."
+            echo "**Verdict:** SKIPPED (no API key)" >> $GITHUB_STEP_SUMMARY
+            echo "Add \`OPENAI_API_KEY\` in repo secrets to run the review." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          # Escape release body for JSON
+          BODY_ESCAPED=$(echo "$RELEASE_BODY" | jq -Rs .)
+          TAG="$RELEASE_TAG"
+
+          PROMPT="You are a release notes reviewer. Analyze the following release notes (tag: $TAG) for consistency and quality.
+
+          Rules:
+          - Score from 0 to 100: clarity, completeness vs template, consistency of tone, no contradictions.
+          - Major inconsistencies: conflicting statements, missing required intent (customer impact, justification), or copy-paste placeholders left in.
+
+          Release notes:
+          $RELEASE_BODY
+
+          Respond with ONLY a single JSON object, no markdown or extra text, with these exact keys:
+          {\"score\": <number 0-100>, \"major_inconsistencies\": <true or false>, \"feedback\": \"<short actionable feedback, or OK if score >= 40 and no major issues>\"}"
+
+          PROMPT_JSON=$(jq -n --arg p "$PROMPT" '{model: "gpt-4o-mini", messages: [{role: "user", content: $p}], response_format: {type: "json_object"}, temperature: 0.2}')
+
+          RESPONSE=$(curl -s -X POST "https://api.openai.com/v1/chat/completions" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PROMPT_JSON") || true
+
+          if [ -z "$RESPONSE" ] || ! echo "$RESPONSE" | jq -e .choices[0].message.content >/dev/null 2>&1; then
+            echo "::error::AI review request failed. Check OPENAI_API_KEY and API availability."
+            echo "**Verdict:** FAIL (review request failed)" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          CONTENT=$(echo "$RESPONSE" | jq -r .choices[0].message.content)
+          SCORE=$(echo "$CONTENT" | jq -r .score // 0)
+          MAJOR=$(echo "$CONTENT" | jq -r .major_inconsistencies // true)
+          FEEDBACK=$(echo "$CONTENT" | jq -r .feedback // "No feedback returned.")
+
+          echo "**Score:** $SCORE / 100 (minimum: $MIN_SCORE)" >> $GITHUB_STEP_SUMMARY
+          echo "**Major inconsistencies:** $MAJOR" >> $GITHUB_STEP_SUMMARY
+          echo "**Feedback:** $FEEDBACK" >> $GITHUB_STEP_SUMMARY
+          echo ""
+
+          FAIL=0
+          REASON=""
+          if [ "$SCORE" -lt "$MIN_SCORE" ] 2>/dev/null; then
+            echo "::error::Score $SCORE is below minimum $MIN_SCORE. $FEEDBACK"
+            REASON="score &lt; $MIN_SCORE"
+            FAIL=1
+          fi
+          if [ "$MAJOR" = "true" ]; then
+            echo "::error::Major inconsistencies detected. $FEEDBACK"
+            [ -n "$REASON" ] && REASON="$REASON; " || true
+            REASON="${REASON}major inconsistencies"
+            FAIL=1
+          fi
+
+          if [ $FAIL -eq 1 ]; then
+            echo "**Verdict:** FAIL ($REASON)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Actionable next steps" >> $GITHUB_STEP_SUMMARY
+            echo "1. Edit the release notes and address the feedback above." >> $GITHUB_STEP_SUMMARY
+            echo "2. Ensure all required sections are filled and consistent with the release template." >> $GITHUB_STEP_SUMMARY
+            echo "3. Re-publish or update the release to re-run this check." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "**Verdict:** PASS" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Release notes passed AI consistency review (score: $SCORE, no major inconsistencies)."
